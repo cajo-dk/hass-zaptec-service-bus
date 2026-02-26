@@ -192,12 +192,12 @@ def build_initial_attributes(device_id: str, charger_id: str) -> dict[str, Any]:
     return attrs
 
 
-def coerce_numeric_or_zero(value: Any) -> int | float:
+def try_coerce_numeric(value: Any) -> int | float | None:
     if isinstance(value, bool):
         return int(value)
     if isinstance(value, (int, float)):
         return value
-    return 0
+    return None
 
 
 def try_extract_json_from_bytes(raw: bytes) -> Any | None:
@@ -349,11 +349,15 @@ def main() -> int:
                         if isinstance(operation_mode_value, str) and operation_mode_value.isdigit():
                             operation_mode_value = int(operation_mode_value)
                         cache["state"] = STATE_710_MAP.get(operation_mode_value, f"unknown_{operation_mode_value}")
-                        attrs["state_710_raw"] = coerce_numeric_or_zero(operation_mode_value)
+                        operation_mode_numeric = try_coerce_numeric(operation_mode_value)
+                        if operation_mode_numeric is not None:
+                            attrs["state_710_raw"] = operation_mode_numeric
                     elif isinstance(state_id, int):
                         name = STATE_ID_NAMES.get(state_id, f"stateid_{state_id}")
                         if state_id in NUMERIC_STATE_IDS:
-                            attrs[name] = coerce_numeric_or_zero(value_parsed)
+                            numeric_value = try_coerce_numeric(value_parsed)
+                            if numeric_value is not None:
+                                attrs[name] = numeric_value
                         else:
                             attrs[name] = value_parsed
 
