@@ -1,0 +1,19 @@
+{
+  "configuration": {
+    "azure_service_bus_connection_string": "Azure Service Bus connection string",
+    "azure_service_bus_topic_name": "Azure Service Bus topic name",
+    "azure_service_bus_subscription_name": "Azure Service Bus subscription name",
+    "azure_service_bus_max_wait_time": "Service Bus max wait time (seconds)",
+    "azure_service_bus_receive_mode": "Service Bus receive mode",
+    "azure_service_bus_transport": "Service Bus transport",
+    "mqtt_host": "MQTT host",
+    "mqtt_port": "MQTT port",
+    "mqtt_username": "MQTT username",
+    "mqtt_password": "MQTT password",
+    "mqtt_keepalive": "MQTT keepalive",
+    "mqtt_client_id": "MQTT client id",
+    "mqtt_base_topic": "MQTT base topic",
+    "mqtt_discovery_prefix": "MQTT discovery prefix",
+    "mqtt_retain": "MQTT retain messages"
+  }
+}
