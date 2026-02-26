@@ -1,5 +1,5 @@
 name: Zaptec Service Bus Monitor
-version: "0.0.4"
+version: "0.0.5"
 slug: zaptec_service_bus
 description: Bridge Zaptec Azure Service Bus messages into Home Assistant MQTT sensor updates.
 url: "https://github.com/cajo-dk/hass-zaptec-service-bus"

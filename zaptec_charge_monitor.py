@@ -192,6 +192,10 @@ def build_initial_attributes(device_id: str, charger_id: str) -> dict[str, Any]:
     return attrs
 
 
+def build_initial_state_attributes() -> dict[str, Any]:
+    return dict(NUMERIC_ATTRIBUTE_DEFAULTS)
+
+
 def try_coerce_numeric(value: Any) -> int | float | None:
     if isinstance(value, bool):
         return int(value)
@@ -332,9 +336,14 @@ def main() -> int:
 
                     cache = charger_state_cache.setdefault(
                         charger_id,
-                        {"state": "unknown", "attributes": build_initial_attributes(device_id, charger_id)},
+                        {
+                            "state": "unknown",
+                            "attributes": build_initial_attributes(device_id, charger_id),
+                            "state_attributes": build_initial_state_attributes(),
+                        },
                     )
                     attrs = cache["attributes"]
+                    state_attrs = cache["state_attributes"]
                     attrs["device_id"] = device_id
                     attrs["charger_id"] = charger_id
 
@@ -351,15 +360,18 @@ def main() -> int:
                         cache["state"] = STATE_710_MAP.get(operation_mode_value, f"unknown_{operation_mode_value}")
                         operation_mode_numeric = try_coerce_numeric(operation_mode_value)
                         if operation_mode_numeric is not None:
-                            attrs["state_710_raw"] = operation_mode_numeric
+                            state_attrs["state_710_raw"] = operation_mode_numeric
                     elif isinstance(state_id, int):
                         name = STATE_ID_NAMES.get(state_id, f"stateid_{state_id}")
                         if state_id in NUMERIC_STATE_IDS:
                             numeric_value = try_coerce_numeric(value_parsed)
                             if numeric_value is not None:
-                                attrs[name] = numeric_value
-                        else:
-                            attrs[name] = value_parsed
+                                state_attrs[name] = numeric_value
+                        elif value_parsed is not None:
+                            state_attrs[name] = value_parsed
+
+                    # Rebuild outgoing attributes from independently cached state attributes.
+                    attrs.update(state_attrs)
 
                     attrs["last_state_id"] = state_id
                     attrs["last_message_timestamp"] = timestamp
