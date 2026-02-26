@@ -97,6 +97,10 @@ NUMERIC_STATE_IDS = {
 }
 
 NUMERIC_ATTRIBUTE_DEFAULTS = {STATE_ID_NAMES[state_id]: 0 for state_id in NUMERIC_STATE_IDS}
+FORCE_ZERO_WHEN_NOT_CHARGING_STATE_IDS = {513, 501, 502, 503, 507, 508, 509}
+FORCE_ZERO_WHEN_NOT_CHARGING_ATTRS = {
+    STATE_ID_NAMES[state_id] for state_id in FORCE_ZERO_WHEN_NOT_CHARGING_STATE_IDS
+}
 
 
 def load_dotenv(path: str = ".env") -> None:
@@ -361,6 +365,9 @@ def main() -> int:
                         operation_mode_numeric = try_coerce_numeric(operation_mode_value)
                         if operation_mode_numeric is not None:
                             state_attrs["state_710_raw"] = operation_mode_numeric
+                            if operation_mode_numeric != 3:
+                                for attribute_name in FORCE_ZERO_WHEN_NOT_CHARGING_ATTRS:
+                                    state_attrs[attribute_name] = 0
                     elif isinstance(state_id, int):
                         name = STATE_ID_NAMES.get(state_id, f"stateid_{state_id}")
                         if state_id in NUMERIC_STATE_IDS:
