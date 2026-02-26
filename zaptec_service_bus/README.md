@@ -21,3 +21,6 @@ Set values in the add-on Configuration tab:
 - `mqtt_base_topic`
 - `mqtt_discovery_prefix`
 - `mqtt_retain`
+- `log_level` (`ERROR`, `INFO`, `DEBUG`)
+
+Only `DEBUG` logs message payloads.

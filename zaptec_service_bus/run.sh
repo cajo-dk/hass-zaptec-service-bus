@@ -38,5 +38,6 @@ export MQTT_CLIENT_ID="$(read_option mqtt_client_id)"
 export MQTT_BASE_TOPIC="$(read_option mqtt_base_topic)"
 export MQTT_DISCOVERY_PREFIX="$(read_option mqtt_discovery_prefix)"
 export MQTT_RETAIN="$(read_option mqtt_retain)"
+export LOG_LEVEL="$(read_option log_level)"
 
 exec python3 /app/zaptec_charge_monitor.py

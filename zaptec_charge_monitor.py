@@ -144,6 +144,25 @@ def env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+LOG_LEVEL_ORDER = {"DEBUG": 10, "INFO": 20, "ERROR": 40}
+
+
+def parse_log_level(raw: str | None) -> str:
+    value = (raw or "INFO").strip().upper()
+    if value not in LOG_LEVEL_ORDER:
+        raise ValueError("LOG_LEVEL must be one of: ERROR, INFO, DEBUG")
+    return value
+
+
+def should_log(current_level: str, event_level: str) -> bool:
+    return LOG_LEVEL_ORDER[event_level] >= LOG_LEVEL_ORDER[current_level]
+
+
+def log_line(current_level: str, event_level: str, message: str) -> None:
+    if should_log(current_level, event_level):
+        print(f"[{event_level}] {message}")
+
+
 def parse_receive_mode(raw: str) -> ServiceBusReceiveMode:
     normalized = raw.strip().lower()
     if normalized in ("peek_lock", "peeklock"):
@@ -296,6 +315,7 @@ def main() -> int:
     discovery_prefix = os.getenv("MQTT_DISCOVERY_PREFIX", "homeassistant").strip("/")
     base_topic = os.getenv("MQTT_BASE_TOPIC", "zaptec").strip("/")
     retain = env_bool("MQTT_RETAIN", True)
+    log_level = parse_log_level(os.getenv("LOG_LEVEL", "INFO"))
 
     mqtt_client = create_mqtt_client()
 
@@ -306,7 +326,7 @@ def main() -> int:
     def handle_signal(sig: int, _frame: Any) -> None:
         nonlocal stop_requested
         if not stop_requested:
-            print(f"\nReceived signal {sig}; shutting down...")
+            log_line(log_level, "INFO", f"Received signal {sig}; shutting down...")
         stop_requested = True
 
     signal.signal(signal.SIGINT, handle_signal)
@@ -318,7 +338,7 @@ def main() -> int:
             subscription_name=subscription_name,
             receive_mode=receive_mode,
         ) as receiver:
-            print("Listening for messages. Press Ctrl-C to stop.")
+            log_line(log_level, "INFO", "Listening for messages. Press Ctrl-C to stop.")
             while not stop_requested:
                 messages = receiver.receive_messages(max_message_count=10, max_wait_time=max_wait_time)
                 if not messages:
@@ -327,7 +347,7 @@ def main() -> int:
                 for message in messages:
                     body = decode_message_body(message)
                     if not isinstance(body, dict):
-                        print(json.dumps({"ignored_body": body}, default=str))
+                        log_line(log_level, "DEBUG", json.dumps({"ignored_body": body}, default=str))
                         if receive_mode == ServiceBusReceiveMode.PEEK_LOCK:
                             receiver.complete_message(message)
                         continue
@@ -391,14 +411,14 @@ def main() -> int:
                     state_topic = f"{base_topic}/chargers/{sanitize_id(charger_id)}/state"
                     outgoing = {"state": cache["state"], **attrs}
                     mqtt_client.publish(state_topic, json.dumps(outgoing, default=str), qos=1, retain=retain)
-                    print(json.dumps(outgoing, indent=2, default=str))
+                    log_line(log_level, "DEBUG", json.dumps(outgoing, indent=2, default=str))
 
                     if receive_mode == ServiceBusReceiveMode.PEEK_LOCK:
                         receiver.complete_message(message)
 
     mqtt_client.loop_stop()
     mqtt_client.disconnect()
-    print("Monitor stopped.")
+    log_line(log_level, "INFO", "Monitor stopped.")
     return 0
 
 

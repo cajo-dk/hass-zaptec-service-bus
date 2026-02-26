@@ -1,6 +1,6 @@
 # Zaptec Service Bus Home Assistant Add-on
 
-Version: `0.0.6`
+Version: `0.0.7`
 
 This repository provides a Home Assistant add-on that listens to Zaptec Azure Service Bus messages and publishes a Home Assistant MQTT sensor payload.
 
@@ -57,6 +57,7 @@ These map directly to runtime env vars consumed by the monitor:
 - `mqtt_base_topic` (default `zaptec`)
 - `mqtt_discovery_prefix` (default `homeassistant`)
 - `mqtt_retain` (default `true`)
+- `log_level` (`ERROR`, `INFO`, `DEBUG`, default `INFO`)
 
 Example values:
 
@@ -76,7 +77,10 @@ mqtt_client_id: "zaptec-charge-monitor"
 mqtt_base_topic: "zaptec"
 mqtt_discovery_prefix: "homeassistant"
 mqtt_retain: true
+log_level: "INFO"
 ```
+
+Message payload logging is only emitted when `log_level` is set to `DEBUG`.
 
 ## Home Assistant Sensor Creation
 
