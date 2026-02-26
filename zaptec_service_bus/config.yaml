@@ -1,0 +1,46 @@
+name: Zaptec Service Bus Monitor
+version: "0.0.1"
+slug: zaptec_service_bus
+description: Bridge Zaptec Azure Service Bus messages into Home Assistant MQTT sensor updates.
+url: "https://github.com/cajo-dk/hass-zaptec-service-bus"
+startup: services
+boot: auto
+init: false
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+  - i386
+options:
+  azure_service_bus_connection_string: ""
+  azure_service_bus_topic_name: ""
+  azure_service_bus_subscription_name: ""
+  azure_service_bus_max_wait_time: 5
+  azure_service_bus_receive_mode: peek_lock
+  azure_service_bus_transport: amqp
+  mqtt_host: core-mosquitto
+  mqtt_port: 1883
+  mqtt_username: ""
+  mqtt_password: ""
+  mqtt_keepalive: 60
+  mqtt_client_id: zaptec-charge-monitor
+  mqtt_base_topic: zaptec
+  mqtt_discovery_prefix: homeassistant
+  mqtt_retain: true
+schema:
+  azure_service_bus_connection_string: str
+  azure_service_bus_topic_name: str
+  azure_service_bus_subscription_name: str
+  azure_service_bus_max_wait_time: int(1,120)
+  azure_service_bus_receive_mode: list(peek_lock|receive_and_delete)
+  azure_service_bus_transport: list(amqp|amqp_over_websocket|aqmp)
+  mqtt_host: str
+  mqtt_port: port
+  mqtt_username: str?
+  mqtt_password: str?
+  mqtt_keepalive: int(5,600)
+  mqtt_client_id: str
+  mqtt_base_topic: str
+  mqtt_discovery_prefix: str
+  mqtt_retain: bool

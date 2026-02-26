@@ -1,0 +1,9 @@
+services:
+  zaptec-service-bus:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: zaptec-service-bus
+    env_file:
+      - .env
+    restart: unless-stopped
