@@ -23,7 +23,7 @@ This repository provides a Home Assistant add-on that listens to Zaptec Azure Se
 
 - [repository.yaml](c:/Users/AlexRasmussen/src/zaptec/repository.yaml): Home Assistant add-on repository metadata.
 - [zaptec_service_bus/config.yaml](c:/Users/AlexRasmussen/src/zaptec/zaptec_service_bus/config.yaml): add-on manifest, options, schema, version.
-- [zaptec_service_bus/Dockerfile](c:/Users/AlexRasmussen/src/zaptec/zaptec_service_bus/Dockerfile): add-on container build.
+- [zaptec_service_bus/Dockerfile](c:/Users/AlexRasmussen/src/zaptec/zaptec_service_bus/Dockerfile): add-on container build (base image provided by Supervisor).
 - [zaptec_service_bus/run.sh](c:/Users/AlexRasmussen/src/zaptec/zaptec_service_bus/run.sh): maps add-on options to env vars and starts monitor.
 - [zaptec_service_bus/zaptec_charge_monitor.py](c:/Users/AlexRasmussen/src/zaptec/zaptec_service_bus/zaptec_charge_monitor.py): monitor runtime in container.
 
