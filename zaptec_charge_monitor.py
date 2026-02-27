@@ -227,6 +227,73 @@ def try_coerce_numeric(value: Any) -> int | float | None:
     return None
 
 
+def parse_message_timestamp(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    if isinstance(value, (int, float)):
+        numeric = float(value)
+        # Treat large values as milliseconds since epoch.
+        if numeric > 1e12:
+            numeric /= 1000.0
+        try:
+            return datetime.fromtimestamp(numeric, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def should_apply_update(
+    field_timestamps: dict[str, datetime],
+    field_name: str,
+    message_timestamp: datetime | None,
+) -> bool:
+    if message_timestamp is None:
+        return True
+    previous_timestamp = field_timestamps.get(field_name)
+    return previous_timestamp is None or message_timestamp >= previous_timestamp
+
+
+def apply_cached_update(
+    state_attrs: dict[str, Any],
+    field_timestamps: dict[str, datetime],
+    field_name: str,
+    value: Any,
+    message_timestamp: datetime | None,
+    log_level: str,
+) -> bool:
+    if not should_apply_update(field_timestamps, field_name, message_timestamp):
+        previous_timestamp = field_timestamps.get(field_name)
+        log_line(
+            log_level,
+            "DEBUG",
+            (
+                f"Dropped stale update for {field_name}: "
+                f"incoming_ts={message_timestamp.isoformat() if message_timestamp else 'none'} "
+                f"< cached_ts={previous_timestamp.isoformat() if previous_timestamp else 'none'}"
+            ),
+        )
+        return False
+    state_attrs[field_name] = value
+    if message_timestamp is not None:
+        field_timestamps[field_name] = message_timestamp
+    return True
+
+
 def try_extract_json_from_bytes(raw: bytes) -> Any | None:
     start = raw.find(b"{")
     end = raw.rfind(b"}")
@@ -364,16 +431,21 @@ def main() -> int:
                             "state": "unknown",
                             "attributes": build_initial_attributes(device_id, charger_id),
                             "state_attributes": build_initial_state_attributes(),
+                            "field_timestamps": {},
+                            "state_timestamp": None,
                         },
                     )
                     attrs = cache["attributes"]
                     state_attrs = cache["state_attributes"]
+                    field_timestamps = cache["field_timestamps"]
+                    state_timestamp = cache["state_timestamp"]
                     attrs["device_id"] = device_id
                     attrs["charger_id"] = charger_id
 
                     value_parsed = parse_value(body.get("Value"))
                     if value_parsed is None:
                         value_parsed = parse_value(body.get("ValueAsString"))
+                    message_timestamp = parse_message_timestamp(timestamp)
 
                     if state_id == 710:
                         operation_mode_value = parse_value(body.get("ValueAsString"))
@@ -381,21 +453,70 @@ def main() -> int:
                             operation_mode_value = parse_value(body.get("Value"))
                         if isinstance(operation_mode_value, str) and operation_mode_value.isdigit():
                             operation_mode_value = int(operation_mode_value)
-                        cache["state"] = STATE_710_MAP.get(operation_mode_value, f"unknown_{operation_mode_value}")
+                        if state_timestamp is None or message_timestamp is None or message_timestamp >= state_timestamp:
+                            cache["state"] = STATE_710_MAP.get(
+                                operation_mode_value,
+                                f"unknown_{operation_mode_value}",
+                            )
+                            cache["state_timestamp"] = message_timestamp
+                        else:
+                            log_line(
+                                log_level,
+                                "DEBUG",
+                                (
+                                    "Dropped stale state update for state_710: "
+                                    f"incoming_ts={message_timestamp.isoformat() if message_timestamp else 'none'} "
+                                    f"< cached_ts={state_timestamp.isoformat() if state_timestamp else 'none'}"
+                                ),
+                            )
                         operation_mode_numeric = try_coerce_numeric(operation_mode_value)
                         if operation_mode_numeric is not None:
-                            state_attrs["state_710_raw"] = operation_mode_numeric
-                            if operation_mode_numeric != 3:
+                            operation_mode_updated = apply_cached_update(
+                                state_attrs,
+                                field_timestamps,
+                                "state_710_raw",
+                                operation_mode_numeric,
+                                message_timestamp,
+                                log_level,
+                            )
+                            if operation_mode_numeric != 3 and operation_mode_updated:
                                 for attribute_name in FORCE_ZERO_WHEN_NOT_CHARGING_ATTRS:
-                                    state_attrs[attribute_name] = 0
+                                    apply_cached_update(
+                                        state_attrs,
+                                        field_timestamps,
+                                        attribute_name,
+                                        0,
+                                        message_timestamp,
+                                        log_level,
+                                    )
                     elif isinstance(state_id, int):
                         name = STATE_ID_NAMES.get(state_id, f"stateid_{state_id}")
                         if state_id in NUMERIC_STATE_IDS:
                             numeric_value = try_coerce_numeric(value_parsed)
                             if numeric_value is not None:
-                                state_attrs[name] = numeric_value
+                                operation_mode = state_attrs.get("state_710_raw", 0)
+                                if (
+                                    name in FORCE_ZERO_WHEN_NOT_CHARGING_ATTRS
+                                    and operation_mode != 3
+                                ):
+                                    numeric_value = 0
+                                apply_cached_update(
+                                    state_attrs,
+                                    field_timestamps,
+                                    name,
+                                    numeric_value,
+                                    message_timestamp,
+                                    log_level,
+                                )
                         elif value_parsed is not None:
-                            state_attrs[name] = value_parsed
+                            apply_cached_update(
+                                state_attrs,
+                                field_timestamps,
+                                name,
+                                value_parsed,
+                                message_timestamp,
+                                log_level,
+                            )
 
                     # Rebuild outgoing attributes from independently cached state attributes.
                     attrs.update(state_attrs)

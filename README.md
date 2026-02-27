@@ -1,6 +1,6 @@
 # Zaptec Service Bus Home Assistant Add-on
 
-Version: `0.0.7`
+Version: `0.0.8`
 
 This repository provides a Home Assistant add-on that listens to Zaptec Azure Service Bus messages and publishes a Home Assistant MQTT sensor payload.
 
