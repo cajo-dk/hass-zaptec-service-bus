@@ -29,7 +29,7 @@ STATE_ID_NAMES = {
     206: "mcu_temp",
     207: "ambient_temp",
     220: "connector_temp",
-    270: "total_energy",
+    270: "humidity",
     501: "voltage_phase_1",
     502: "voltage_phase_2",
     503: "voltage_phase_3",
@@ -44,7 +44,7 @@ STATE_ID_NAMES = {
     522: "fuse_size",
     523: "cable_current_limit",
     553: "session_energy",
-    554: "meter_reading",
+    554: "signed_meter_value",
     702: "charging_current",
     708: "available_current",
     710: "charger_operation_mode",
@@ -201,6 +201,43 @@ def parse_value(value: Any) -> Any:
         return text
 
 
+def extract_ocmf_reading_value(value: Any) -> float | int | None:
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("OCMF|"):
+            try:
+                value = json.loads(text.split("|", 1)[1])
+            except (IndexError, json.JSONDecodeError):
+                return None
+        else:
+            return None
+
+    if not isinstance(value, dict):
+        return None
+
+    readings = value.get("RD")
+    if not isinstance(readings, list) or not readings:
+        return None
+
+    first_reading = readings[0]
+    if not isinstance(first_reading, dict):
+        return None
+
+    reading_value = first_reading.get("RV")
+    if isinstance(reading_value, bool):
+        return int(reading_value)
+    if isinstance(reading_value, (int, float)):
+        return reading_value
+    if isinstance(reading_value, str):
+        try:
+            if "." in reading_value:
+                return float(reading_value)
+            return int(reading_value)
+        except ValueError:
+            return None
+    return None
+
+
 def sanitize_id(value: str) -> str:
     return "".join(ch.lower() if ch.isalnum() else "_" for ch in value).strip("_")
 
@@ -210,13 +247,16 @@ def build_initial_attributes(device_id: str, charger_id: str) -> dict[str, Any]:
         "device_id": device_id,
         "charger_id": charger_id,
         "state_710_raw": 0,
+        "total_energy": 0,
     }
     attrs.update(NUMERIC_ATTRIBUTE_DEFAULTS)
     return attrs
 
 
 def build_initial_state_attributes() -> dict[str, Any]:
-    return dict(NUMERIC_ATTRIBUTE_DEFAULTS)
+    attrs = dict(NUMERIC_ATTRIBUTE_DEFAULTS)
+    attrs["total_energy"] = 0
+    return attrs
 
 
 def try_coerce_numeric(value: Any) -> int | float | None:
@@ -491,6 +531,25 @@ def main() -> int:
                                     )
                     elif isinstance(state_id, int):
                         name = STATE_ID_NAMES.get(state_id, f"stateid_{state_id}")
+                        if state_id == 554 and value_parsed is not None:
+                            apply_cached_update(
+                                state_attrs,
+                                field_timestamps,
+                                name,
+                                value_parsed,
+                                message_timestamp,
+                                log_level,
+                            )
+                            total_energy_value = extract_ocmf_reading_value(value_parsed)
+                            if total_energy_value is not None:
+                                apply_cached_update(
+                                    state_attrs,
+                                    field_timestamps,
+                                    "total_energy",
+                                    total_energy_value,
+                                    message_timestamp,
+                                    log_level,
+                                )
                         if state_id in NUMERIC_STATE_IDS:
                             numeric_value = try_coerce_numeric(value_parsed)
                             if numeric_value is not None:
