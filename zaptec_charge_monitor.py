@@ -2,6 +2,7 @@ import json
 import os
 import signal
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -409,6 +410,154 @@ def publish_discovery(
     return state_topic
 
 
+def sleep_with_shutdown_check(seconds: float, stop_requested: callable) -> None:
+    deadline = time.monotonic() + max(seconds, 0)
+    while not stop_requested() and time.monotonic() < deadline:
+        time.sleep(min(0.5, deadline - time.monotonic()))
+
+
+def process_message(
+    message: Any,
+    mqtt_client: mqtt.Client,
+    published_discovery: set[str],
+    charger_state_cache: dict[str, dict[str, Any]],
+    discovery_prefix: str,
+    base_topic: str,
+    retain: bool,
+    log_level: str,
+) -> None:
+    body = decode_message_body(message)
+    if not isinstance(body, dict):
+        log_line(log_level, "DEBUG", json.dumps({"ignored_body": body}, default=str))
+        return
+
+    state_id = parse_value(body.get("StateId"))
+    charger_id = str(body.get("ChargerId") or body.get("DeviceId") or "unknown")
+    device_id = str(body.get("DeviceId") or charger_id)
+    device_name = f"Zaptec {device_id}"
+    timestamp = body.get("Timestamp")
+
+    cache = charger_state_cache.setdefault(
+        charger_id,
+        {
+            "state": "unknown",
+            "attributes": build_initial_attributes(device_id, charger_id),
+            "state_attributes": build_initial_state_attributes(),
+            "field_timestamps": {},
+            "state_timestamp": None,
+        },
+    )
+    attrs = cache["attributes"]
+    state_attrs = cache["state_attributes"]
+    field_timestamps = cache["field_timestamps"]
+    state_timestamp = cache["state_timestamp"]
+    attrs["device_id"] = device_id
+    attrs["charger_id"] = charger_id
+
+    value_parsed = parse_value(body.get("Value"))
+    if value_parsed is None:
+        value_parsed = parse_value(body.get("ValueAsString"))
+    message_timestamp = parse_message_timestamp(timestamp)
+
+    if state_id == 710:
+        operation_mode_value = parse_value(body.get("ValueAsString"))
+        if operation_mode_value is None:
+            operation_mode_value = parse_value(body.get("Value"))
+        if isinstance(operation_mode_value, str) and operation_mode_value.isdigit():
+            operation_mode_value = int(operation_mode_value)
+        if state_timestamp is None or message_timestamp is None or message_timestamp >= state_timestamp:
+            cache["state"] = STATE_710_MAP.get(operation_mode_value, f"unknown_{operation_mode_value}")
+            cache["state_timestamp"] = message_timestamp
+        else:
+            log_line(
+                log_level,
+                "DEBUG",
+                (
+                    "Dropped stale state update for state_710: "
+                    f"incoming_ts={message_timestamp.isoformat() if message_timestamp else 'none'} "
+                    f"< cached_ts={state_timestamp.isoformat() if state_timestamp else 'none'}"
+                ),
+            )
+        operation_mode_numeric = try_coerce_numeric(operation_mode_value)
+        if operation_mode_numeric is not None:
+            operation_mode_updated = apply_cached_update(
+                state_attrs,
+                field_timestamps,
+                "state_710_raw",
+                operation_mode_numeric,
+                message_timestamp,
+                log_level,
+            )
+            if operation_mode_numeric != 3 and operation_mode_updated:
+                for attribute_name in FORCE_ZERO_WHEN_NOT_CHARGING_ATTRS:
+                    apply_cached_update(
+                        state_attrs,
+                        field_timestamps,
+                        attribute_name,
+                        0,
+                        message_timestamp,
+                        log_level,
+                    )
+    elif isinstance(state_id, int):
+        name = STATE_ID_NAMES.get(state_id, f"stateid_{state_id}")
+        if state_id == 554 and value_parsed is not None:
+            apply_cached_update(
+                state_attrs,
+                field_timestamps,
+                name,
+                value_parsed,
+                message_timestamp,
+                log_level,
+            )
+            total_energy_value = extract_ocmf_reading_value(value_parsed)
+            if total_energy_value is not None:
+                apply_cached_update(
+                    state_attrs,
+                    field_timestamps,
+                    "total_energy",
+                    total_energy_value,
+                    message_timestamp,
+                    log_level,
+                )
+        if state_id in NUMERIC_STATE_IDS:
+            numeric_value = try_coerce_numeric(value_parsed)
+            if numeric_value is not None:
+                operation_mode = state_attrs.get("state_710_raw", 0)
+                if name in FORCE_ZERO_WHEN_NOT_CHARGING_ATTRS and operation_mode != 3:
+                    numeric_value = 0
+                apply_cached_update(
+                    state_attrs,
+                    field_timestamps,
+                    name,
+                    numeric_value,
+                    message_timestamp,
+                    log_level,
+                )
+        elif value_parsed is not None:
+            apply_cached_update(
+                state_attrs,
+                field_timestamps,
+                name,
+                value_parsed,
+                message_timestamp,
+                log_level,
+            )
+
+    attrs.update(state_attrs)
+    attrs["last_state_id"] = state_id
+    attrs["last_message_timestamp"] = timestamp
+    attrs["last_updated_utc"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    if charger_id not in published_discovery:
+        publish_discovery(mqtt_client, discovery_prefix, base_topic, charger_id, device_name, device_id)
+        published_discovery.add(charger_id)
+
+    state_topic = f"{base_topic}/chargers/{sanitize_id(charger_id)}/state"
+    outgoing = {"state": cache["state"], **attrs}
+    mqtt_client.publish(state_topic, json.dumps(outgoing, default=str), qos=1, retain=retain)
+    log_line(log_level, "DEBUG", json.dumps(outgoing, indent=2, default=str))
+
+
 def main() -> int:
     load_dotenv(".env")
 
@@ -439,165 +588,101 @@ def main() -> int:
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
-    with ServiceBusClient.from_connection_string(connection_string, transport_type=transport_type) as sb_client:
-        with sb_client.get_subscription_receiver(
-            topic_name=topic_name,
-            subscription_name=subscription_name,
-            receive_mode=receive_mode,
-        ) as receiver:
-            log_line(log_level, "INFO", "Listening for messages. Press Ctrl-C to stop.")
-            while not stop_requested:
-                messages = receiver.receive_messages(max_message_count=10, max_wait_time=max_wait_time)
-                if not messages:
-                    continue
+    reconnect_delay_seconds = 1.0
+    max_reconnect_delay_seconds = 60.0
 
-                for message in messages:
-                    body = decode_message_body(message)
-                    if not isinstance(body, dict):
-                        log_line(log_level, "DEBUG", json.dumps({"ignored_body": body}, default=str))
-                        if receive_mode == ServiceBusReceiveMode.PEEK_LOCK:
-                            receiver.complete_message(message)
-                        continue
+    try:
+        while not stop_requested:
+            reconnect_required = False
+            try:
+                log_line(log_level, "INFO", f"Connecting to Service Bus topic {topic_name}/{subscription_name}...")
+                with ServiceBusClient.from_connection_string(
+                    connection_string,
+                    transport_type=transport_type,
+                ) as sb_client:
+                    with sb_client.get_subscription_receiver(
+                        topic_name=topic_name,
+                        subscription_name=subscription_name,
+                        receive_mode=receive_mode,
+                    ) as receiver:
+                        log_line(log_level, "INFO", "Listening for messages. Press Ctrl-C to stop.")
+                        reconnect_delay_seconds = 1.0
 
-                    state_id = parse_value(body.get("StateId"))
-                    charger_id = str(body.get("ChargerId") or body.get("DeviceId") or "unknown")
-                    device_id = str(body.get("DeviceId") or charger_id)
-                    device_name = f"Zaptec {device_id}"
-                    timestamp = body.get("Timestamp")
+                        while not stop_requested:
+                            try:
+                                messages = receiver.receive_messages(
+                                    max_message_count=10,
+                                    max_wait_time=max_wait_time,
+                                )
+                            except Exception as err:
+                                reconnect_required = True
+                                log_line(
+                                    log_level,
+                                    "ERROR",
+                                    f"Service Bus receive failed ({type(err).__name__}): {err}",
+                                )
+                                break
 
-                    cache = charger_state_cache.setdefault(
-                        charger_id,
-                        {
-                            "state": "unknown",
-                            "attributes": build_initial_attributes(device_id, charger_id),
-                            "state_attributes": build_initial_state_attributes(),
-                            "field_timestamps": {},
-                            "state_timestamp": None,
-                        },
-                    )
-                    attrs = cache["attributes"]
-                    state_attrs = cache["state_attributes"]
-                    field_timestamps = cache["field_timestamps"]
-                    state_timestamp = cache["state_timestamp"]
-                    attrs["device_id"] = device_id
-                    attrs["charger_id"] = charger_id
+                            if not messages:
+                                continue
 
-                    value_parsed = parse_value(body.get("Value"))
-                    if value_parsed is None:
-                        value_parsed = parse_value(body.get("ValueAsString"))
-                    message_timestamp = parse_message_timestamp(timestamp)
-
-                    if state_id == 710:
-                        operation_mode_value = parse_value(body.get("ValueAsString"))
-                        if operation_mode_value is None:
-                            operation_mode_value = parse_value(body.get("Value"))
-                        if isinstance(operation_mode_value, str) and operation_mode_value.isdigit():
-                            operation_mode_value = int(operation_mode_value)
-                        if state_timestamp is None or message_timestamp is None or message_timestamp >= state_timestamp:
-                            cache["state"] = STATE_710_MAP.get(
-                                operation_mode_value,
-                                f"unknown_{operation_mode_value}",
-                            )
-                            cache["state_timestamp"] = message_timestamp
-                        else:
-                            log_line(
-                                log_level,
-                                "DEBUG",
-                                (
-                                    "Dropped stale state update for state_710: "
-                                    f"incoming_ts={message_timestamp.isoformat() if message_timestamp else 'none'} "
-                                    f"< cached_ts={state_timestamp.isoformat() if state_timestamp else 'none'}"
-                                ),
-                            )
-                        operation_mode_numeric = try_coerce_numeric(operation_mode_value)
-                        if operation_mode_numeric is not None:
-                            operation_mode_updated = apply_cached_update(
-                                state_attrs,
-                                field_timestamps,
-                                "state_710_raw",
-                                operation_mode_numeric,
-                                message_timestamp,
-                                log_level,
-                            )
-                            if operation_mode_numeric != 3 and operation_mode_updated:
-                                for attribute_name in FORCE_ZERO_WHEN_NOT_CHARGING_ATTRS:
-                                    apply_cached_update(
-                                        state_attrs,
-                                        field_timestamps,
-                                        attribute_name,
-                                        0,
-                                        message_timestamp,
-                                        log_level,
+                            for message in messages:
+                                try:
+                                    process_message(
+                                        message=message,
+                                        mqtt_client=mqtt_client,
+                                        published_discovery=published_discovery,
+                                        charger_state_cache=charger_state_cache,
+                                        discovery_prefix=discovery_prefix,
+                                        base_topic=base_topic,
+                                        retain=retain,
+                                        log_level=log_level,
                                     )
-                    elif isinstance(state_id, int):
-                        name = STATE_ID_NAMES.get(state_id, f"stateid_{state_id}")
-                        if state_id == 554 and value_parsed is not None:
-                            apply_cached_update(
-                                state_attrs,
-                                field_timestamps,
-                                name,
-                                value_parsed,
-                                message_timestamp,
-                                log_level,
-                            )
-                            total_energy_value = extract_ocmf_reading_value(value_parsed)
-                            if total_energy_value is not None:
-                                apply_cached_update(
-                                    state_attrs,
-                                    field_timestamps,
-                                    "total_energy",
-                                    total_energy_value,
-                                    message_timestamp,
-                                    log_level,
-                                )
-                        if state_id in NUMERIC_STATE_IDS:
-                            numeric_value = try_coerce_numeric(value_parsed)
-                            if numeric_value is not None:
-                                operation_mode = state_attrs.get("state_710_raw", 0)
-                                if (
-                                    name in FORCE_ZERO_WHEN_NOT_CHARGING_ATTRS
-                                    and operation_mode != 3
-                                ):
-                                    numeric_value = 0
-                                apply_cached_update(
-                                    state_attrs,
-                                    field_timestamps,
-                                    name,
-                                    numeric_value,
-                                    message_timestamp,
-                                    log_level,
-                                )
-                        elif value_parsed is not None:
-                            apply_cached_update(
-                                state_attrs,
-                                field_timestamps,
-                                name,
-                                value_parsed,
-                                message_timestamp,
-                                log_level,
-                            )
+                                except Exception as err:
+                                    log_line(
+                                        log_level,
+                                        "ERROR",
+                                        f"Message processing failed ({type(err).__name__}): {err}",
+                                    )
+                                    continue
 
-                    # Rebuild outgoing attributes from independently cached state attributes.
-                    attrs.update(state_attrs)
+                                if receive_mode == ServiceBusReceiveMode.PEEK_LOCK:
+                                    try:
+                                        receiver.complete_message(message)
+                                    except Exception as err:
+                                        reconnect_required = True
+                                        log_line(
+                                            log_level,
+                                            "ERROR",
+                                            f"Service Bus message completion failed ({type(err).__name__}): {err}",
+                                        )
+                                        break
 
-                    attrs["last_state_id"] = state_id
-                    attrs["last_message_timestamp"] = timestamp
-                    attrs["last_updated_utc"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                            if reconnect_required:
+                                break
+            except Exception as err:
+                reconnect_required = True
+                log_line(
+                    log_level,
+                    "ERROR",
+                    f"Service Bus connection failed ({type(err).__name__}): {err}",
+                )
 
-                    if charger_id not in published_discovery:
-                        publish_discovery(mqtt_client, discovery_prefix, base_topic, charger_id, device_name, device_id)
-                        published_discovery.add(charger_id)
+            if stop_requested:
+                break
 
-                    state_topic = f"{base_topic}/chargers/{sanitize_id(charger_id)}/state"
-                    outgoing = {"state": cache["state"], **attrs}
-                    mqtt_client.publish(state_topic, json.dumps(outgoing, default=str), qos=1, retain=retain)
-                    log_line(log_level, "DEBUG", json.dumps(outgoing, indent=2, default=str))
+            if reconnect_required:
+                log_line(
+                    log_level,
+                    "INFO",
+                    f"Reconnecting to Service Bus in {reconnect_delay_seconds:.0f}s...",
+                )
+                sleep_with_shutdown_check(reconnect_delay_seconds, lambda: stop_requested)
+                reconnect_delay_seconds = min(reconnect_delay_seconds * 2, max_reconnect_delay_seconds)
+    finally:
+        mqtt_client.loop_stop()
+        mqtt_client.disconnect()
 
-                    if receive_mode == ServiceBusReceiveMode.PEEK_LOCK:
-                        receiver.complete_message(message)
-
-    mqtt_client.loop_stop()
-    mqtt_client.disconnect()
     log_line(log_level, "INFO", "Monitor stopped.")
     return 0
 
