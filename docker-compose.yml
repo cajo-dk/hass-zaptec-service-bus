@@ -4,6 +4,6 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: zaptec-service-bus
-    env_file:
-      - .env
+    volumes:
+      - ./config:/config:ro
     restart: unless-stopped

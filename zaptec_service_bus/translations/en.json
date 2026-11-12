@@ -1,19 +1,82 @@
 {
   "configuration": {
-    "azure_service_bus_connection_string": "Azure Service Bus connection string",
-    "azure_service_bus_topic_name": "Azure Service Bus topic name",
-    "azure_service_bus_subscription_name": "Azure Service Bus subscription name",
-    "azure_service_bus_max_wait_time": "Service Bus max wait time (seconds)",
-    "azure_service_bus_receive_mode": "Service Bus receive mode",
-    "azure_service_bus_transport": "Service Bus transport",
-    "mqtt_host": "MQTT host",
-    "mqtt_port": "MQTT port",
-    "mqtt_username": "MQTT username",
-    "mqtt_password": "MQTT password",
-    "mqtt_keepalive": "MQTT keepalive",
-    "mqtt_client_id": "MQTT client id",
-    "mqtt_base_topic": "MQTT base topic",
-    "mqtt_discovery_prefix": "MQTT discovery prefix",
-    "mqtt_retain": "MQTT retain messages"
+    "azure_service_bus_connection_string": {
+      "name": "Azure Service Bus connection string"
+    },
+    "azure_service_bus_topic_name": {
+      "name": "Azure Service Bus topic name"
+    },
+    "azure_service_bus_subscription_name": {
+      "name": "Azure Service Bus subscription name"
+    },
+    "azure_service_bus_max_wait_time": {
+      "name": "Service Bus max wait time (seconds)"
+    },
+    "azure_service_bus_receive_mode": {
+      "name": "Service Bus receive mode"
+    },
+    "azure_service_bus_transport": {
+      "name": "Service Bus transport"
+    },
+    "mqtt_host": {
+      "name": "MQTT host"
+    },
+    "mqtt_port": {
+      "name": "MQTT port"
+    },
+    "mqtt_username": {
+      "name": "MQTT username"
+    },
+    "mqtt_password": {
+      "name": "MQTT password"
+    },
+    "mqtt_keepalive": {
+      "name": "MQTT keepalive"
+    },
+    "mqtt_client_id": {
+      "name": "MQTT client id"
+    },
+    "mqtt_base_topic": {
+      "name": "MQTT base topic"
+    },
+    "mqtt_discovery_prefix": {
+      "name": "MQTT discovery prefix"
+    },
+    "mqtt_discovery_enabled": {
+      "name": "Publish Home Assistant MQTT discovery"
+    },
+    "mqtt_retain": {
+      "name": "MQTT retain messages"
+    },
+    "log_level": {
+      "name": "Log level"
+    },
+    "monta_enabled": {
+      "name": "Read Monta charging plans"
+    },
+    "monta_client_id": {
+      "name": "Monta Public API client ID"
+    },
+    "monta_client_secret": {
+      "name": "Monta Public API client secret"
+    },
+    "monta_hub_cookie": {
+      "name": "Monta Hub session Cookie header"
+    },
+    "monta_charge_point_id": {
+      "name": "Monta charge point ID"
+    },
+    "monta_operator_id": {
+      "name": "Monta operator ID"
+    },
+    "monta_poll_interval": {
+      "name": "Monta polling interval (seconds)"
+    },
+    "monta_battery_capacity_kwh": {
+      "name": "Usable battery capacity (kWh)"
+    },
+    "monta_charging_power_kw": {
+      "name": "Maximum vehicle charging power (kW)"
+    }
   }
 }

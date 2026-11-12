@@ -2,7 +2,9 @@ import json
 import os
 import signal
 import sys
+import threading
 import time
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -54,6 +56,9 @@ STATE_ID_NAMES = {
     718: "rcd_trip_status",
     723: "last_session",
     751: "uptime_seconds",
+    761: "time_zone",
+    762: "time_schedule",
+    763: "next_schedule_event",
     800: "installation_id",
     801: "charger_group",
     802: "serial_number",
@@ -143,6 +148,12 @@ def env_bool(name: str, default: bool) -> bool:
     if raw is None or raw.strip() == "":
         return default
     return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def write_heartbeat(path: str) -> None:
+    heartbeat_path = Path(path)
+    heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
+    heartbeat_path.touch()
 
 
 LOG_LEVEL_ORDER = {"DEBUG": 10, "INFO": 20, "ERROR": 40}
@@ -374,8 +385,21 @@ def create_mqtt_client() -> mqtt.Client:
     if username:
         mqtt_client.username_pw_set(username, password=password)
 
+    connected = threading.Event()
+    connection_result = []
+
+    def on_connect(_client, _userdata, _flags, reason, _properties) -> None:
+        connection_result.append(reason)
+        connected.set()
+
+    mqtt_client.on_connect = on_connect
     mqtt_client.connect(require_env("MQTT_HOST"), env_int("MQTT_PORT", 1883), env_int("MQTT_KEEPALIVE", 60))
     mqtt_client.loop_start()
+    if not connected.wait(timeout=10) or connection_result[0].is_failure:
+        mqtt_client.disconnect()
+        mqtt_client.loop_stop()
+        reason = str(connection_result[0]) if connection_result else "connection timed out"
+        raise ValueError(f"MQTT connection failed: {reason}")
     return mqtt_client
 
 
@@ -425,6 +449,7 @@ def process_message(
     base_topic: str,
     retain: bool,
     log_level: str,
+    discovery_enabled: bool = True,
 ) -> None:
     body = decode_message_body(message)
     if not isinstance(body, dict):
@@ -457,6 +482,8 @@ def process_message(
     value_parsed = parse_value(body.get("Value"))
     if value_parsed is None:
         value_parsed = parse_value(body.get("ValueAsString"))
+    if state_id in (762, 763) and value_parsed == "":
+        value_parsed = None
     message_timestamp = parse_message_timestamp(timestamp)
 
     if state_id == 710:
@@ -533,7 +560,9 @@ def process_message(
                     message_timestamp,
                     log_level,
                 )
-        elif value_parsed is not None:
+        elif value_parsed is not None or state_id in (762, 763):
+            # An empty schedule observation cancels the previous schedule.
+            # Retain the API payload as-is: 763 is not documented as a start/stop pair.
             apply_cached_update(
                 state_attrs,
                 field_timestamps,
@@ -548,7 +577,7 @@ def process_message(
     attrs["last_message_timestamp"] = timestamp
     attrs["last_updated_utc"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
-    if charger_id not in published_discovery:
+    if discovery_enabled and charger_id not in published_discovery:
         publish_discovery(mqtt_client, discovery_prefix, base_topic, charger_id, device_name, device_id)
         published_discovery.add(charger_id)
 
@@ -559,7 +588,13 @@ def process_message(
 
 
 def main() -> int:
-    load_dotenv(".env")
+    config_file = os.getenv("CONFIG_FILE")
+    if config_file:
+        load_dotenv(config_file)
+    elif Path("/config/config.env").is_file():
+        load_dotenv("/config/config.env")
+    else:
+        load_dotenv(".env")
 
     connection_string = require_env("AZURE_SERVICE_BUS_CONNECTION_STRING")
     topic_name = require_env("AZURE_SERVICE_BUS_TOPIC_NAME")
@@ -569,24 +604,56 @@ def main() -> int:
     transport_type = parse_transport_type(os.getenv("AZURE_SERVICE_BUS_TRANSPORT", "amqp"))
 
     discovery_prefix = os.getenv("MQTT_DISCOVERY_PREFIX", "homeassistant").strip("/")
+    discovery_enabled = env_bool("MQTT_DISCOVERY_ENABLED", True)
     base_topic = os.getenv("MQTT_BASE_TOPIC", "zaptec").strip("/")
     retain = env_bool("MQTT_RETAIN", True)
     log_level = parse_log_level(os.getenv("LOG_LEVEL", "INFO"))
+    heartbeat_file = os.getenv("HEARTBEAT_FILE", "/tmp/zaptec-service-bus-heartbeat")
+
+    monta_enabled = env_bool("MONTA_ENABLED", False)
+    if monta_enabled:
+        require_env("MONTA_HUB_COOKIE")
+        require_env("MONTA_CLIENT_SECRET")
+        if not (os.getenv("MONTA_CLIENT_ID") or os.getenv("MONTA_CLINT_ID")):
+            raise ValueError("Set MONTA_CLIENT_ID when MONTA_ENABLED=true")
+        if env_int("MONTA_CHARGE_POINT_ID", 0) <= 0:
+            raise ValueError("MONTA_CHARGE_POINT_ID must be positive")
+        if env_int("MONTA_POLL_INTERVAL", 30) < 30:
+            raise ValueError("MONTA_POLL_INTERVAL must be at least 30 seconds")
+        for name, default in [("MONTA_BATTERY_CAPACITY_KWH", "61"), ("MONTA_CHARGING_POWER_KW", "10.4")]:
+            value = float(os.getenv(name, default))
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be a positive finite number")
 
     mqtt_client = create_mqtt_client()
+    write_heartbeat(heartbeat_file)
 
     stop_requested = False
     published_discovery: set[str] = set()
     charger_state_cache: dict[str, dict[str, Any]] = {}
+    monta_stop = threading.Event()
+    monta_worker = None
 
     def handle_signal(sig: int, _frame: Any) -> None:
         nonlocal stop_requested
         if not stop_requested:
             log_line(log_level, "INFO", f"Received signal {sig}; shutting down...")
         stop_requested = True
+        monta_stop.set()
 
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
+
+    if monta_enabled:
+        from monta_charge_monitor import run_monta_poller
+
+        monta_worker = threading.Thread(
+            target=run_monta_poller,
+            args=(mqtt_client, monta_stop, log_level),
+            name="monta-schedule-poller",
+            daemon=True,
+        )
+        monta_worker.start()
 
     reconnect_delay_seconds = 1.0
     max_reconnect_delay_seconds = 60.0
@@ -614,6 +681,7 @@ def main() -> int:
                                     max_message_count=10,
                                     max_wait_time=max_wait_time,
                                 )
+                                write_heartbeat(heartbeat_file)
                             except Exception as err:
                                 reconnect_required = True
                                 log_line(
@@ -637,6 +705,7 @@ def main() -> int:
                                         base_topic=base_topic,
                                         retain=retain,
                                         log_level=log_level,
+                                        discovery_enabled=discovery_enabled,
                                     )
                                 except Exception as err:
                                     log_line(
@@ -680,6 +749,9 @@ def main() -> int:
                 sleep_with_shutdown_check(reconnect_delay_seconds, lambda: stop_requested)
                 reconnect_delay_seconds = min(reconnect_delay_seconds * 2, max_reconnect_delay_seconds)
     finally:
+        monta_stop.set()
+        if monta_worker is not None:
+            monta_worker.join(timeout=45)
         mqtt_client.loop_stop()
         mqtt_client.disconnect()
 

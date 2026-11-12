@@ -1,0 +1,9 @@
+.env
+config/config.env
+.git
+.venv
+.vscode
+__pycache__
+*.pyc
+NORMALIZED_PAYLOAD.md
+zaptec_service_bus

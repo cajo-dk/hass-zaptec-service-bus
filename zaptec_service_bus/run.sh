@@ -37,7 +37,18 @@ export MQTT_KEEPALIVE="$(read_option mqtt_keepalive)"
 export MQTT_CLIENT_ID="$(read_option mqtt_client_id)"
 export MQTT_BASE_TOPIC="$(read_option mqtt_base_topic)"
 export MQTT_DISCOVERY_PREFIX="$(read_option mqtt_discovery_prefix)"
+export MQTT_DISCOVERY_ENABLED="$(read_option mqtt_discovery_enabled)"
 export MQTT_RETAIN="$(read_option mqtt_retain)"
 export LOG_LEVEL="$(read_option log_level)"
+
+export MONTA_ENABLED="$(read_option monta_enabled)"
+export MONTA_CLIENT_ID="$(read_option monta_client_id)"
+export MONTA_CLIENT_SECRET="$(read_option monta_client_secret)"
+export MONTA_HUB_COOKIE="$(read_option monta_hub_cookie)"
+export MONTA_CHARGE_POINT_ID="$(read_option monta_charge_point_id)"
+export MONTA_OPERATOR_ID="$(read_option monta_operator_id)"
+export MONTA_POLL_INTERVAL="$(read_option monta_poll_interval)"
+export MONTA_BATTERY_CAPACITY_KWH="$(read_option monta_battery_capacity_kwh)"
+export MONTA_CHARGING_POWER_KW="$(read_option monta_charging_power_kw)"
 
 exec python3 /app/zaptec_charge_monitor.py

@@ -1,16 +1,12 @@
-ARG BUILD_FROM
-FROM ${BUILD_FROM}
+FROM python:3.15.2-slim
 
 WORKDIR /app
 
-RUN apk add --no-cache python3 py3-pip
-
 COPY requirements.txt /tmp/requirements.txt
-RUN python3 -m venv /opt/venv \
-    && /opt/venv/bin/pip install --no-cache-dir -r /tmp/requirements.txt
-ENV PATH="/opt/venv/bin:${PATH}"
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 COPY zaptec_charge_monitor.py /app/zaptec_charge_monitor.py
+COPY monta_charge_monitor.py /app/monta_charge_monitor.py
 COPY run.sh /run.sh
 RUN chmod a+x /run.sh
 
