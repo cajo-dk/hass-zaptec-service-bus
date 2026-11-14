@@ -170,9 +170,10 @@ def should_log(current_level: str, event_level: str) -> bool:
     return LOG_LEVEL_ORDER[event_level] >= LOG_LEVEL_ORDER[current_level]
 
 
-def log_line(current_level: str, event_level: str, message: str) -> None:
+def log_line(current_level: str, event_level: str, message: str, *, file: Any = None) -> None:
     if should_log(current_level, event_level):
-        print(f"[{event_level}] {message}")
+        timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        print(f"[{timestamp}] [{event_level}] {message}", file=file, flush=True)
 
 
 def parse_receive_mode(raw: str) -> ServiceBusReceiveMode:
@@ -657,6 +658,7 @@ def main() -> int:
 
     reconnect_delay_seconds = 1.0
     max_reconnect_delay_seconds = 60.0
+    startup_logged = False
 
     try:
         while not stop_requested:
@@ -682,6 +684,9 @@ def main() -> int:
                                     max_wait_time=max_wait_time,
                                 )
                                 write_heartbeat(heartbeat_file)
+                                if not startup_logged:
+                                    log_line(log_level, "INFO", "Zaptec app started successfully; MQTT and Service Bus connected.")
+                                    startup_logged = True
                             except Exception as err:
                                 reconnect_required = True
                                 log_line(
@@ -763,5 +768,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except ValueError as err:
-        print(f"Configuration error: {err}", file=sys.stderr)
+        log_line("ERROR", "ERROR", f"Configuration error: {err}", file=sys.stderr)
         raise SystemExit(2)

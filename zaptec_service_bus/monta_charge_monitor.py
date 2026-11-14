@@ -309,5 +309,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except (ValueError, MontaReadError) as error:
-        print(f"Error: {error}", file=sys.stderr)
+        log_line("ERROR", "ERROR", f"Error: {error}", file=sys.stderr)
         raise SystemExit(1)
